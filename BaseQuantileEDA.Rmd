@@ -43,11 +43,14 @@ vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
 medQuant <- data.table()
 get_pure_quants <- function(){
   #selects and retrieves the purity quantile values for each PGM datatable
+  
 }
-medQuant$PGM <- ddply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "PGM"],.fun = )
-for PGM tables:
-  select PUR_Q50
-calculate mean
+
+#think about returning a list of tbl objects and used rbind_all to create a single table
+for(table in vcf_meta_df$tbl_name){
+  return(tbl(vcf_db(), pgm_table) %>% select(POS, CHROM, VIAL,REP, PLAT, PUR_Q2.5, PUR_Q50, PUR_Q97.5))
+} 
+
 
 ```
 
