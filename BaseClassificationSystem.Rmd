@@ -1,0 +1,45 @@
+---
+title: "Naive Base Classification System"
+author: "Nate Olson"
+date: "09/16/2014"
+output: html_document
+---
+
+## Objective:   
+Develop a method to classify the confidence for individual base positions for the reference genome.  Proposed classification system is comprised of three levels with eight total sublevels based on the observed proportions of reference and non reference bases in reads mapped to that genome position.  Probabilities for the percent of cells within the population with or without the reference base was calculated using the binomial probability function.    
+
+## Note: 
+Will used the variant call data to modify the reference genome to reflect the consensus, the assumption will be that only false positive variants and rare variant calls will remain.  The classification system/ methods proposed below will better characterize rare variants than using standard variant calling pipelines.
+
+## Proposed classification system
+
+* High Confidence Consensus
+    * high3 confidence consensus (3C) - probability that reference base in present in 99% of the population is 1
+    * high2 confidence consensus (2C) - probability that reference base in present in 90% of the population is 1
+    * high1 confidence consensus (1C) - probability that reference base in present in 90% of the population is > 0.95
+
+* Candidate Polymoric Sites    
+    * high confidence polymophism (3P) - probability that non-reference base is present in > 10% of the population is 1
+    * intermediate confidence polymorphism (2P) - probability that non-reference base is present in > 10% of the population is > 0.95
+    * low confidence polymorphism (1P) - probability that non-reference base is present in > 10% of the population is < 0.95 or indicatation of bias
+
+* Uncertain Positions
+    * Low confindence indication of bias (IB) - strong indication of bias for three out of the four bias indicators (overides other base classifications)
+    * Low coverage bias (LC) - coverage less than 10 X (excluding ends of reference genome) [will need to remap to reference genome with different cut site or use mapping algorithm that allows for circular genomes]
+    
+This method will be used to classify individual datasets.
+
+## Multiple datasets
+A similar system will be used to classify consensus base postions for the reference material overall as for the individual datasets. These consensus bases classifications will be based on 24 datasets from 8 replicate vials and two sequencing platforms. 
+
+### High Confidence Postions
+For postions classified as high confidence for all 24 datasets the confidence level of the position will be the overall median high confidence value (using the 3-1 scale), and rounded to the nearest value.    
+
+### Candidate Polymorphic Sites
+For positions classified at candidate polymorphic site for all 24 datasets a similar method used to assign a consensus values for high confidence positions will be used.
+
+### Positions with mixed classifications
+#### Potential Senarios   
+1. All datasets in agreement excluding a dataset with bias indicators, e.g. 1P and IB
+2. Position classifications based on sequencing platform or vial - look for indicators of systematic bias or inhomogeneity
+3. Mixed bag???

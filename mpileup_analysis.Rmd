@@ -1,0 +1,163 @@
+---
+title: "Initial Analysis of LT2"
+author: "Nate Olson"
+date: "09/05/2014"
+output: html_document
+---
+
+The objective of this analysis is to work out inital methods for classifying genome position confidence.  
+```{r message=FALSE, warning=FALSE}
+library(VariantAnnotation);library(data.table);library(reshape2);library(plyr);library(dplyr);library(knitr);library(stringr);library(ggplot2)
+```
+
+```{r cache=TRUE}
+setwd("/media//nolson/second//mirror/Micro_RM/data/RM8375/MiSeq/mpileup/")
+ref = "/media//nolson/second//mirror/Micro_RM/data/RM8375/ref/CFSAN008157.HGAP.fasta"
+
+pgm_1 <- readVcf("S0h-1-test.vcf", geno=ref)
+```
+Needed to decompress the vcf file before using readVcf
+
+### Mpileup vcf description
+http://kimplove.blogspot.com/2011/03/vcf-format.html
+*I16*
+1.  #reference Q13 bases on the forward strand 
+2.  #reference Q13 bases on the reverse strand
+3.  #non-ref Q13 bases on the forward strand 
+4.  #non-ref Q13 bases on the reverse strand
+5.  sum of reference base qualities 
+6.  sum of squares of reference base qualities
+7.  sum of non-ref base qualities 
+8.  sum of squares of non-ref base qualities
+9.  sum of ref mapping qualities 
+10.  sum of squares of ref mapping qualities
+11.  sum of non-ref mapping qualities 
+12.  sum of squares of non-ref mapping qualities
+13.  sum of tail distance for ref bases 
+14.  sum of squares of tail distance for ref bases
+15.  sum of tail distance for non-ref bases 
+16 sum of squares of tail distance for non-ref
+
+### Header from vcf file 
+
+* RPB,Number=1,Type=Float,Description="Mann-Whitney U test of Read Position Bias (bigger is better)">    
+* MQB,Number=1,Type=Float,Description="Mann-Whitney U test of Mapping Quality Bias (bigger is better)">    
+* BQB,Number=1,Type=Float,Description="Mann-Whitney U test of Base Quality Bias (bigger is better)">    
+* MQSB,Number=1,Type=Float,Description="Mann-Whitney U test of Mapping Quality vs Strand Bias (bigger is better)">  
+
+## General plots showing the distribution of statistical summaries
+```{r, echo=FALSE}
+for(i in 2:(length(names(pgm_1@info@listData))-2)){
+  hist(pgm_1@info@listData[[i]], main = names(pgm_1@info@listData)[i])
+  print(names(pgm_1@info@listData)[i])
+  print(quantile(x = pgm_1@info@listData[[i]], probs = c(0.9,0.95,0.99,0.999,0.9999,0.99999,0.999999),na.rm = T))
+}
+```
+
+Note that the "echo = FALSE"" parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+* Purity is the observed ratio of reference to total bases
+* pur_prob90  is probability that 90% of cells within the popution have the reference base
+
+### Getting purity estimates
+```{r cache=TRUE}
+# can potential use bionomial distribution based probabilities 
+calc_purity <- function(I16){
+  return( sum(I16[1:2]) / sum(I16[1:4]) )
+}
+
+calc_pure_prob <- function(I16,p){
+  return(pbinom(q=sum(I16[1:2]),size = sum(I16[1:4]),prob = p,))
+}
+
+calc_poly_prob <- function(I16,p){
+  return(pbinom(q=sum(I16[3:4]),size = sum(I16[1:4]),prob = p))
+}
+
+# working with IRanges
+purity <- sapply(pgm_1@info@listData$I16,FUN = calc_purity)
+pur_prob90 <- sapply(pgm_1@info@listData$I16,FUN=calc_pure_prob, p = 0.9)
+pur_prob99 <- sapply(pgm_1@info@listData$I16,FUN=calc_pure_prob, p = 0.99)
+HP_prob <- sapply(pgm_1@info@listData$I16,FUN=calc_poly_prob, p = 0.1)
+```
+
+Defining filter values: start with 0.95, filtering for signs of bias based on Mann-Whitney U tests
+```{r cache=TRUE}
+#get_filter_value <- function(x) quantile(x,probs = 0.005, na.rm = T)
+get_filter_value <- function(x) 0.95
+filter_values <- colwise(get_filter_value)(as.data.frame(pgm_1@info[,c("RPB","MQB","BQB","MQSB")]))
+filter_values$PUR <- get_filter_value(purity)
+```
+
+# Summary of bias parameters
+Characterized each position based on the number of bias parameters with a P value greater than 0.95.
+
+### Bias Values
+* RPB: "Mann-Whitney U test of Read Position Bias (bigger is better)"    
+* MQB: "Mann-Whitney U test of Mapping Quality Bias (bigger is better)"    
+* BQB: "Mann-Whitney U test of Base Quality Bias (bigger is better)"    
+* MQSB: "Mann-Whitney U test of Mapping Quality vs Strand Bias (bigger is better)"  
+
+```{r cache=TRUE}
+filter_rows <- data.frame()
+pgm_info <- info(pgm_1)
+filter_rows <- rbind(filter_rows, data.frame(filter = "RPB", 
+                                             row = rownames(pgm_info[!is.na(pgm_info$RPB) &
+                                                                            pgm_info$RPB < filter_values$RPB,])))
+filter_rows <- rbind(filter_rows, data.frame(filter = "MQB", 
+                                             row = rownames(pgm_info[!is.na(pgm_info$MQB) &
+                                                                            pgm_info$MQB < filter_values$MQB,])))
+filter_rows <- rbind(filter_rows, data.frame(filter = "BQB", 
+                                             row = rownames(pgm_info[!is.na(pgm_info$BQB) &
+                                                                           pgm_info$BQB < filter_values$BQB,])))
+filter_rows <- rbind(filter_rows, data.frame(filter = "MQSB", 
+                                             row = rownames(pgm_info[!is.na(pgm_info$MQSB) &
+                                                                            pgm_info$MQSB < filter_values$MQSB,])))
+filter_rows$value <- 1
+filter_rows_wide <- dcast(filter_rows,row~filter, fill = 0 )
+rownames(filter_rows_wide) <- filter_rows_wide$row
+filter_rows_wide$row <- NULL
+
+filter_rows_wide <- filter_rows_wide[filter_rows_wide$PUR == 1,]
+filter_rows_wide$PUR <- NULL
+filter_rows_wide$bias <- rowSums(filter_rows_wide)
+bias_rows <- rownames(filter_rows_wide[filter_rows_wide$bias != 0,])
+```
+
+# Variant Annotations
+```{r cache=TRUE}
+annotations <- data.frame(CHROM = str_sub(string = rownames(info(pgm_1)),start = 1,end = 0), POS = pgm_1@rowData@ranges@start)
+annotations <- tbl_df(annotations)
+
+# candiate variants - union of variant calls
+
+# candidate variants sites, non-reference base present in > 10% of the population
+annotations$class[purity < 0.9] <- "candidate variants"
+
+# candidate variants sites, non-reference base present in > 10% of
+annotations$class[purity < 0.9 & annotations$CHROM %in% bias_rows] <- "low conf variants"
+
+# candidate rare variants, non-reference base potentially present in less than X% of cells in RM - 
+# purity values > 0.9 with indicator for potential bias
+annotations$class[purity >= 0.9] <- "candidate rare variants"
+
+# low conf consensus, non-reference base likely present in less than X% of cells in RM - 
+# purity values > 0.9 and indicator for potential bias
+annotations$class[purity >= 0.9 & annotations$CHROM %in% bias_rows] <- "low conf rare variants"
+
+# high conf consensus, non-reference base present in less than X% of cells in RM - based on purity filter value 
+annotations$class[purity > filter_values$PUR] <- "high conf consensus"
+
+# to be determined
+# position 1669428 no mapped to position ....
+#
+```
+
+## Table summarizing variant annotations
+```{r cache=TRUE}
+annotations_group <- group_by(annotations, class)
+ann_table <- summarize(annotations_group,positions = length(CHROM))
+```
+```{r results='asis'}
+kable(ann_table)
+```

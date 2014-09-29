@@ -1,0 +1,146 @@
+---
+title: "UnSupII"
+author: "Nate Olson"
+date: "09/18/2014"
+output: html_document
+---
+New approach, filtering out high confidence positions prior to performing analysis.
+
+Need to go back and work out parameters.
+```{r, echo=FALSE, warning=FALSE,message=FALSE}
+library(VariantAnnotation);library(data.table);library(reshape2);library(plyr);library(dplyr);library(knitr);library(stringr);library(ggplot2); library(caret); library(knitr);library(ggbiplot)
+```
+
+## Load and Manipulate Dataset
+```{r, cache = T}
+setwd("/media//nolson/second//mirror/Micro_RM/data/RM8375/MiSeq/mpileup/")
+ref = "/media//nolson/second//mirror/Micro_RM/data/RM8375/ref/CFSAN008157.HGAP.fasta"
+vcf <- readVcf("S0h-1-test.vcf", geno=ref)
+```
+
+### Calculating Purity Values
+```{r, cache=TRUE}
+calc_purity <- function(I16){
+  return( sum(I16[1:2]) / sum(I16[1:4]) )
+}
+calc_pure_prob <- function(I16,p){
+  return(pbinom(q=sum(I16[1:2]),size = sum(I16[1:4]),prob = p))
+}
+
+calc_poly_prob <- function(I16,p){
+  return(pbinom(q=sum(I16[3:4]),size = sum(I16[1:4]),prob = p))
+}
+
+PUR <- sapply(vcf@info@listData$I16,FUN = calc_purity)
+HC_prob97 <- sapply(vcf@info@listData$I16,FUN=calc_pure_prob, p = 0.97)
+CP_prob10 <- sapply(vcf@info@listData$I16,FUN=calc_poly_prob, p = 0.1)
+```
+## Bias Parameter
+```{r,cache=TRUE}
+filter_rows <- data.table()
+vcf_info <- info(vcf)
+filter_rows <- rbind(filter_rows, data.frame(filter = "RPB", 
+                                             POS = ranges(vcf)@start[!is.na(vcf_info$RPB) &
+                                                                            vcf_info$RPB < 0.95]))
+filter_rows <- rbind(filter_rows, data.frame(filter = "MQB", 
+                                              POS = ranges(vcf)@start[!is.na(vcf_info$MQB) &
+                                                                            vcf_info$MQB < 0.95]))
+filter_rows <- rbind(filter_rows, data.frame(filter = "BQB", 
+                                              POS = ranges(vcf)@start[!is.na(vcf_info$BQB) &
+                                                                           vcf_info$BQB < 0.95]))
+filter_rows <- rbind(filter_rows, data.frame(filter = "MQSB", 
+                                              POS = ranges(vcf)@start[!is.na(vcf_info$MQSB) &
+                                                                            vcf_info$MQSB < 0.95]))
+filter_rows$value <- 1
+filter_rows_wide <- dcast(filter_rows,POS~filter, fill = 0 )
+rownames(filter_rows_wide) <- filter_rows_wide$POS
+filter_rows_wide$POS <- NULL
+
+filter_rows_wide$bias <- rowSums(filter_rows_wide)
+filter_rows_wide$POS <- rownames(filter_rows_wide)
+bias_rows <- subset(filter_rows_wide, select = c(POS,bias))
+```
+
+```{r, cache=TRUE}
+annotations <- data.table(CHROM = str_sub(string = rownames(info(vcf)),start = 1,end = 8), POS = ranges(vcf)@start, HC_prob97, CP_prob10)
+                          #RPB = info(vcf)$RPB, MQB = info(vcf)$MQB, 
+                          #BQB = info(vcf)$BQB)
+annotations <- join(x = annotations,y = bias_rows)
+annotations$bias[is.na(annotations$bias)] <- -1
+
+high_conf <- annotations[annotations$HC_prob97 == 1,]
+
+```
+
+```{r}
+#annotations[annotations$bias == -1 & HC_prob97 < 1,]
+```
+MQSB is has NA for purity values less than 1 will exclude from cluster analysis for now
+Still issues with NA
+
+```{r}
+unknown <- select(annotations[annotations$HC_prob97 != 1,], select = -c(HC_prob97,CP_prob10))
+
+#removing position with no coverage
+unknown <- unknown[!is.na(unknown$PUR),]
+
+## Splitting data to make more manageable size
+set.seed(3456)
+trainIndex <- createDataPartition(unknown$PUR, p = .80,
+                                  list = FALSE,
+                                  times = 1)
+unkTrain <- unknown[as.vector(trainIndex),]
+unkTrain_Lables <- subset(unkTrain, select = c(CHROM,POS))
+unkTrain_LF <- subset(unkTrain, select = -c(CHROM,POS))
+```
+
+## Principal Component Analysis
+Skewness and magnitude impact PCA.  Only centers and scaled that data, will want to look into possible other data transformations as a number of the are highly skewed. Also potentially use a single parameter for bias, e.g. number of bias predictors with a p value >= 0.95.
+See https://tgmstat.wordpress.com/2013/11/07/unsupervised-data-pre-processing-for-predictive-modeling/ for more information on pre-processing predictors
+
+```{r}
+ann.pca <- prcomp(as.matrix(unkTrain_LF), center = TRUE, scale. = TRUE)
+```
+
+The majority of the variance is explained by the first four components.
+```{r}
+summary(ann.pca)
+plot(ann.pca, type = "l")
+```
+
+### Principal component biplot
+Can see three distinct groups with one minor group, potential groupings for classification.
+```{r}
+ggbiplot(ann.pca, obs.scale = 1, var.scale = 1, ellipse = TRUE, 
+              circle = TRUE) + scale_color_discrete(name = '') + theme(legend.direction = 'horizontal', 
+               legend.position = 'top') + theme_bw()
+```
+
+## Kmeans Clustering using PC
+Using kmers clustering to generate clusters based on PCA
+```{r kmeans pca}
+kmeans_out4pca <- kmeans(as.matrix(ann.pca$x), 8,nstart = 20)
+unkTrain$Kmeans4pca <-kmeans_out4pca$cluster
+```
+
+### Visualizing clusters
+Principal component biplot with kmeans clustering labels. Does differentiate the large cluster 
+```{r kmeans pca vis}
+ggplot(unkTrain) + geom_bar(aes(x = Kmeans4pca)) + theme_bw()
+ggbiplot(ann.pca, obs.scale = 1, var.scale = 1, groups = as.factor(kmeans_out4pca$cluster), ellipse = TRUE, 
+              circle = TRUE) + scale_color_discrete(name = '') + theme(legend.direction = 'horizontal', 
+               legend.position = 'top') + theme_bw()
+```
+
+## Decision Tree for Kmeans PC clusters
+```{r decision tree ,cache=TRUE }
+unkTrain_LF$Labels <- kmeans_out4pca$cluster
+modFit <- train(.outcome~., method = "rpart", data = unkTrain_LF)
+```
+
+### Visualizing Decision Tree 
+```{r, cache=TRUE}
+print(modFit$finalModel)
+plot(modFit$finalModel)
+text(modFit$finalModel, use.n=TRUE, all=TRUE, cex= 0.8)
+```

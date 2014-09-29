@@ -1,0 +1,200 @@
+---
+title: "decision Based Position Classification"
+author: "Nate Olson"
+date: "09/18/2014"
+output: html_document
+---
+```{r, echo=FALSE, warning=FALSE,message=FALSE}
+library(VariantAnnotation);library(data.table);library(reshape2);library(plyr);library(dplyr);library(knitr);library(stringr);library(ggplot2); library(caret); library(knitr);library(ggbiplot)
+```
+# Objective
+Use unsupervised statistical learning methods to develop a set of rule for use in classifying genome positions. 
+
+## Proposed approach
+1. Generate set of parameters to use in position classification
+2. Use Principal Component Analysis to Summarize Parameters
+3. Group positions used kmeans clustering
+4. Based on cluster label devise a set of rules for classifying genome positions.
+
+### Purity Assessments
+* PUR - ratio of the number of the reads with the reference base at a postion divided by the total number of bases
+* HC_Prob90 - the probability that >= 90 % of the cells (really reads) in the population have the reference base
+* HC_Prob99 - the probability that >= 99 % of the cells (really reads) in the population have the reference base
+* CP_prob - probability that >= 10% of the cells (really reads) in the population *do not* have the reference base
+
+### Bias Values
+* RPB: "Mann-Whitney U test of Read Position Bias (bigger is better)"    
+* MQB: "Mann-Whitney U test of Mapping Quality Bias (bigger is better)"    
+* BQB: "Mann-Whitney U test of Base Quality Bias (bigger is better)"    
+* MQSB: "Mann-Whitney U test of Mapping Quality vs Strand Bias (bigger is better)"  
+
+## Load and Manipulate Dataset
+```{r, cache = T}
+setwd("/media//nolson/second//mirror/Micro_RM/data/RM8375/MiSeq/mpileup/")
+ref = "/media//nolson/second//mirror/Micro_RM/data/RM8375/ref/CFSAN008157.HGAP.fasta"
+vcf <- readVcf("S0h-1-test.vcf", geno=ref)
+```
+
+
+
+### Calculating Purity Values
+```{r, cache=TRUE}
+calc_purity <- function(I16){
+  return( sum(I16[1:2]) / sum(I16[1:4]) )
+}
+
+calc_pure_prob <- function(I16,p){
+  return(pbinom(q=sum(I16[1:2]),size = sum(I16[1:4]),prob = p))
+}
+
+calc_poly_prob <- function(I16,p){
+  return(pbinom(q=sum(I16[3:4]),size = sum(I16[1:4]),prob = p))
+}
+
+PUR <- sapply(vcf@info@listData$I16,FUN = calc_purity)
+HC_prob90 <- sapply(vcf@info@listData$I16,FUN=calc_pure_prob, p = 0.9)
+HC_prob99 <- sapply(vcf@info@listData$I16,FUN=calc_pure_prob, p = 0.99)
+CP_prob <- sapply(vcf@info@listData$I16,FUN=calc_poly_prob, p = 0.1)
+```
+
+### Variant Annotation Table
+Generating a table of parameter for use in classifying each of the positions.  Subset the table on HC_prob90, and only looking at 25% of the genome positions.  Subset on HP_prob90 to ensure both high confidence and low confidence positions are included in the test dataset.
+
+```{r, cache=TRUE}
+annotations <- data.table(CHROM = str_sub(string = rownames(info(vcf)),start = 1,end = 8), POS = ranges(vcf)@start,
+                          DP = info(vcf)$DP, RPB = info(vcf)$RPB, MQB = info(vcf)$MQB, 
+                          BQB = info(vcf)$BQB, MBSQ = info(vcf)$MQSB, MQ0F = info(vcf)$MQ0F, PUR, HC_prob90, HC_prob99, CP_prob)
+
+
+## Splitting data to make more manageable size
+set.seed(3456)
+trainIndex <- createDataPartition(annotations$HC_prob90, p = .25,
+                                  list = FALSE,
+                                  times = 1)
+annoTrain <- annotations[as.vector(trainIndex),]
+```
+
+
+### Parameter relationships
+Relationship between depth and probability that the reference base is present in >= 90% of the population.  As expected the probability is lower for positions with lower coverage.
+```{r warning=FALSE, message=FALSE}
+ggplot(annoTrain) + geom_smooth(aes(x = DP, y= HC_prob90), family = "binomial") + facet_wrap(~CHROM) + theme_bw()
+```
+
+Relationship between sequencing depth and genome position.  Only looking at the overall relationship, no regions stand out as having relatively high or low coverage.  Looking more closely at specific region may provide additional insight, e.g. edges of proposed misassembly.
+```{r warning=FALSE, message=FALSE}
+ggplot(annoTrain) + geom_path(aes(x = POS, y = DP), alpha = 0.25) + geom_smooth(aes(x = POS, y = DP), color = "red") + facet_wrap(~CHROM,scale = "free_x", ncol = 1) + theme_bw()
+```
+
+Probability of a polymorphic site (position where more than one base in present in >= 10% of the population).  Only `r length(annoTrain$CP_prop[annoTrain$CP > 0.5])` positions (in the training data, ~25% of all the genome positions) have a probability that the site is polymorphic greater than 0.5.
+```{r warning=FALSE, message=FALSE}
+ggplot(annoTrain[annoTrain$CP_prob > 0.5,]) + geom_point(aes(x = DP, y= CP_prob, color = CHROM)) + theme_bw()
+```
+
+Relationship between the reference base purity at each position and the probability that the site is polymorphic.  The large uncertainty for lower purity values is due to sample size (fewer low purity positions).
+```{r warning=FALSE, message=FALSE}
+ggplot(annoTrain) + geom_smooth(aes(x = PUR, y= CP_prob), family = "binomial") + facet_wrap(~CHROM) + theme_bw()
+```
+
+(Sanity Check) Relationship between the probability that that reference base is present in >= 90 % of the population and that the non-reference bases are in >= 10 % of the population.  As expected there is a clear relationship between the two.
+```{r warning=FALSE, message=FALSE}
+ggplot(annoTrain) + geom_smooth(aes(x = HC_prob90, y= CP_prob)) + facet_wrap(~CHROM) + theme_bw()
+```
+
+# Unsupervised Learning: PCA and Cluster analysis
+Preparing the data for cluster analysis
+```{r}
+#removing columns for clustering analysis, and HC_prob90 (redundant when including CP_prob)
+annoTrain_Lables <- subset(annoTrain, select = c(CHROM,POS))
+annoTrain_LF <- subset(annoTrain, select = -c(CHROM,POS,HC_prob90))
+```
+
+Note: The large number of NA's for the bais values could be problematic, replacing NA's with 0
+```{r}
+#function from http://stackoverflow.com/questions/7235657/fastest-way-to-replace-nas-in-a-large-data-table
+f_dowle2 = function(DT) {
+    for (i in names(DT))
+        DT[is.na(get(i)),i:=0,with=FALSE]
+}
+f_dowle2(annoTrain_LF)
+```
+
+## Principal Component Analysis
+Skewness and magnitude impact PCA.  Only centers and scaled that data, will want to look into possible other data transformations as a number of the are highly skewed. Also potentially use a single parameter for bias, e.g. number of bias predictors with a p value >= 0.95.
+See https://tgmstat.wordpress.com/2013/11/07/unsupervised-data-pre-processing-for-predictive-modeling/ for more information on pre-processing predictors
+
+```{r}
+ann.pca <- prcomp(as.matrix(annoTrain_LF), center = TRUE, scale. = TRUE)
+```
+
+The majority of the variance is explained by the first four components.
+```{r}
+summary(ann.pca)
+plot(ann.pca, type = "l")
+```
+### Principal component biplot
+Can see three distinct groups with one minor group, potential groupings for classification.
+```{r}
+ggbiplot(ann.pca, obs.scale = 1, var.scale = 1, ellipse = TRUE, 
+              circle = TRUE) + scale_color_discrete(name = '') + theme(legend.direction = 'horizontal', 
+               legend.position = 'top') + theme_bw()
+```
+
+
+## Kmeans Clustering
+Groups the data into k clusters - here we will define k as 8, representing 8 different consensus position classification values and 4 for the four observed clusters in the PCA analysis. 
+```{r kmeans}
+set.seed(2)
+kmeans_out8 = kmeans(as.matrix(annoTrain_LF), 8, nstart = 20)
+annoTrain$Kmeans8 <-kmeans_out8$cluster
+kmeans_out3 = kmeans(as.matrix(annoTrain_LF), 3, nstart = 20)
+annoTrain$Kmeans3 <-kmeans_out3$cluster
+```
+
+### Visualizing clusters
+Note that the clusters do not agree with PCA analysis, cluster follow PC2 but not PC1, the primary issue here is that the values were not preprocessed prior to clustering.
+```{rkmeans vis}
+ggplot(annoTrain) + geom_bar(aes(x = Kmeans3)) + theme_bw()
+ggbiplot(ann.pca, obs.scale = 1, var.scale = 1, groups = as.factor(kmeans_out3$cluster), ellipse = TRUE, circle = TRUE) + scale_color_discrete(name = '') + theme(legend.direction = 'horizontal', 
+               legend.position = 'top') + theme_bw()
+ggplot(annoTrain) + geom_bar(aes(x = Kmeans8)) + theme_bw()
+ggbiplot(ann.pca, obs.scale = 1, var.scale = 1, groups = as.factor(kmeans_out8$cluster), ellipse = TRUE, circle = TRUE) + scale_color_discrete(name = '') + theme(legend.direction = 'horizontal', 
+               legend.position = 'top') + theme_bw()
+```
+
+## Kmeans Clustering using PC
+Using kmers clustering to generate clusters based on PCA
+```{r kmeans pca}
+kmeans_out4pca <- kmeans(as.matrix(ann.pca$x), 4,nstart = 20)
+annoTrain$Kmeans4pca <-kmeans_out4pca$cluster
+```
+
+### Visualizing clusters
+Principal component biplot with kmeans clustering labels. Does differentiate the large cluster 
+```{r kmeans pca vis}
+ggplot(annoTrain) + geom_bar(aes(x = Kmeans4pca)) + theme_bw()
+ggbiplot(ann.pca, obs.scale = 1, var.scale = 1, groups = as.factor(kmeans_out4pca$cluster), ellipse = TRUE, 
+              circle = TRUE) + scale_color_discrete(name = '') + theme(legend.direction = 'horizontal', 
+               legend.position = 'top') + theme_bw()
+```
+
+## Decision Tree for Kmeans PC clusters
+```{r decision tree ,cache=TRUE }
+annoTrain_LF$Labels <- kmeans_out4pca$cluster
+modFit <- train(Labels~., method = "rpart", data = annoTrain_LF)
+```
+
+### Visualizing Decision Tree 
+```{r}
+print(modFit$finalModel)
+plot(modFit$finalModel, uniform=TRUE, main="Classification Tree")
+text(modFit$finalModel, use.n=TRUE, all=TRUE, cex= 0.8)
+```
+Note that two of the bias measures were the primary predictors for the classifiers.
+
+# Next Steps
+* Develop a better parameter set
+  * Biological parametes- repeat regions
+  * Reduce biases to a single parameter to reduce the weight
+* Work out appropriate preprocessing steps
+
