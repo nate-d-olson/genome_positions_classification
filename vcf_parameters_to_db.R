@@ -35,7 +35,7 @@ calc_quantile <- function(I16,p){
 
 ## Get file info
 parse_vcf_filename <- function(vcf_filename){
-  full_split <- str_split(vcf_filename,pattern = "mpileup_vcf/")[[1]]
+  full_split <- str_split(vcf_filename,pattern = "mpileup_vcf//")[[1]]
   if(grepl("MiSeq",full_split[1])){
     sample_name <- str_split(full_split[2],"_")[[1]]
     return(c("name" = sample_name[1],"PLAT"= "MiSeq","VIAL" = str_sub(sample_name[1],2,2) , "REP" = str_sub(sample_name[1],5)))
@@ -68,12 +68,13 @@ process_vcf_purity <- function (vcf_file, vcf_db){
   #generate datatable
   vcf_tbl <- data.table(PLAT=vcf_meta["PLAT"], VIAL=vcf_meta["VIAL"],REP=vcf_meta["REP"], CHROM = str_sub(string = rownames(info(vcf)),start = 1,end = 8), 
                         POS = ranges(vcf)@start, DP = info(vcf)$DP, QUAL = vcf@fixed$QUAL, RPB = info(vcf)$RPB, MQB = info(vcf)$MQB, 
-                            BQB = info(vcf)$BQB, MBSQ = info(vcf)$MQSB, MQ0F = info(vcf)$MQ0F, PUR, PUR_prob97, str_c("PUR_Q", c(2.5,50,97.5),sep = ""))
+                            BQB = info(vcf)$BQB, MBSQ = info(vcf)$MQSB, MQ0F = info(vcf)$MQ0F, PUR, PUR_prob97, PUR_Q2.5, PUR_Q50, PUR_Q97.5)
   I16$POS <- vcf_tbl$POS
   vcf_join <- join(vcf_tbl,I16)
   
   #move to database
-  copy_to(vcf_db, vcf_join, name = vcf_meta["name"], temporary = FALSE, indexes = list("PLAT","VIAL","REP","CHROM","POS"))
+  tbl_name = str_replace(string = unname(vcf_meta["name"]),pattern = "-",replacement = "_")
+  copy_to(vcf_db, vcf_join, name = tbl_name, temporary = FALSE, indexes = list("PLAT","VIAL","REP","CHROM","POS"),)
   rm(vcf,vcf_join,vcf_tbl,I16,PUR,PUR_prob97)
 }
 
@@ -83,8 +84,12 @@ process_vcf_purity <- function (vcf_file, vcf_db){
 vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
 
 #processing all mpileup vcf files
-vcf_files <- list.files(path = "../../data/RM375/*/mipleup/mpileup_vcf/", pattern = "*.vcf", full.names = TRUE)
+vcf_miseq <- list.files(path = "../../data//RM8375//MiSeq//mpileup/mpileup_vcf/", full.names = TRUE)
+for(vcf in vcf_miseq){
+  process_vcf_purity(vcf_file = vcf, vcf_db)
+}
 
-for(vcf in vcf_files){
+vcf_pgm <- list.files(path = "../../data//RM8375//PGM//mpileup/mpileup_vcf/", full.names = TRUE)
+for(vcf in vcf_miseq){
   process_vcf_purity(vcf_file = vcf, vcf_db)
 }
