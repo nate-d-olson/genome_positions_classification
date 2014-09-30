@@ -40,13 +40,27 @@ vcf_meta_df$tbl_name <- str_replace(string = vcf_meta_df$name ,pattern = "-",rep
 #### Loading sqlite db
 ```{r}
 vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
-medQuant <- data.table()
-get_pure_quants <- function(){
+
+get_pure_quants <- function(db_tbl){
   #selects and retrieves the purity quantile values for each PGM datatable
-  
+  return(data.table(tbl(vcf_db(), db_tbl) %>% select(POS, CHROM, VIAL,REP, PLAT, PUR_Q2.5, PUR_Q50, PUR_Q97.5))
 }
 
+#will need to exclude undetermined
+quant_tbl <- alply(vcf_meta_df$tbl_name,.fun = get_pure_quants) %>% rbind_all() 
+
+
+
+
 #think about returning a list of tbl objects and used rbind_all to create a single table
+start with list of sql tables
+  create list of table with parameters of interest (PUR_Q50, POS, CHROM, PLAT, VIAL, REP)
+    rbind_all
+calculate summaries by CHROM POS and PLAT
+additional figures
+
+laply
+
 for(table in vcf_meta_df$tbl_name){
   return(tbl(vcf_db(), pgm_table) %>% select(POS, CHROM, VIAL,REP, PLAT, PUR_Q2.5, PUR_Q50, PUR_Q97.5))
 } 

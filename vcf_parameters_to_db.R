@@ -1,14 +1,11 @@
 ## Script for loading vcf files into sqlite db
-library(VariantAnnotation)
-library(data.table)
-library(plyr)
-library(stringr)
-library(dplyr)
-library(tidyr)
-library(reshape2)
-library(doMC)
-## Specify the number of cores
-registerDoMC(8)
+library(VariantAnnotation) #
+#library(data.table) 
+library(plyr) 
+library(stringr) 
+library(dplyr) 
+#library(tidyr)
+#library(reshape2)
 
 #global variables
 ref = "../../data/RM8375/ref/CFSAN008157.HGAP.fasta"
@@ -40,23 +37,29 @@ parse_vcf_filename <- function(vcf_filename){
     sample_name <- str_split(full_split[2],"_")[[1]]
     return(c("name" = sample_name[1],"PLAT"= "MiSeq","VIAL" = str_sub(sample_name[1],2,2) , "REP" = str_sub(sample_name[1],5)))
   } else {
-    vial = str_sub(full_split[2], 14,14)
+    vial = str_sub(full_split[2], 13,13)
     return(c("name" = str_c("PGM",vial,sep = "-"),"PLAT"= "PGM","VIAL" = vial, "REP" = 1))
   }  
 }
 
 ## calculating position probabilites and purity
 process_vcf_purity <- function (vcf_file, vcf_db){
+  # get metadata
+  vcf_meta <- parse_vcf_filename(vcf_file)
+  tbl_name <- str_replace(string = unname(vcf_meta["name"]),pattern = "-",replacement = "_")
+  if(tbl_name %in% dbListTables(vcf_db$con)){
+    return("Next Dataset")
+  }
+  
   #read vcf
   vcf <- readVcf(vcf_file, geno=ref)
   
-  # get metadata
-  vcf_meta <- parse_vcf_filename(vcf_file)
+
   #get I16 info into a data.table  
   I16_names <- c("R_Q13_F","R_Q13_R","NR_Q13_F","NR_Q13_R","RS_BQ",
                  "R_BQ_SSq","NR_BQ_S","NR_BQ_SSq","R_MQ_S","R_MQ_SSq",
                  "NR_MQ_S","NR_MQ_SSq","R_TD_S","R_TD_SSq","NR_TD_S","NR_TD_SSq")
-  I16 <- ldply(info(vcf)$I16,.parallel = TRUE) %>% tbl_df() %>% setnames(I16_names)
+  I16 <- ldply(info(vcf)$I16) %>% tbl_df() %>% setnames(I16_names)
   
   # calculate purity
   PUR <- sapply(info(vcf)$I16,FUN = calc_purity)
@@ -73,7 +76,6 @@ process_vcf_purity <- function (vcf_file, vcf_db){
   vcf_join <- join(vcf_tbl,I16)
   
   #move to database
-  tbl_name = str_replace(string = unname(vcf_meta["name"]),pattern = "-",replacement = "_")
   copy_to(vcf_db, vcf_join, name = tbl_name, temporary = FALSE, indexes = list("PLAT","VIAL","REP","CHROM","POS"),)
   rm(vcf,vcf_join,vcf_tbl,I16,PUR,PUR_prob97)
 }
@@ -90,6 +92,6 @@ for(vcf in vcf_miseq){
 }
 
 vcf_pgm <- list.files(path = "../../data//RM8375//PGM//mpileup/mpileup_vcf/", full.names = TRUE)
-for(vcf in vcf_miseq){
+for(vcf in vcf_pgm){
   process_vcf_purity(vcf_file = vcf, vcf_db)
 }
