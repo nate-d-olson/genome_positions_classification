@@ -1,0 +1,3 @@
+TODO
+* Issue with databases having different numbers of rows.
+  -this is either due to different rumber of rows in the vcf file or rows created by the join function

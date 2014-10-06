@@ -1,6 +1,6 @@
 ## Script for loading vcf files into sqlite db
 library(VariantAnnotation) #
-#library(data.table) 
+library(data.table) 
 library(plyr) 
 library(stringr) 
 library(dplyr) 
@@ -47,9 +47,9 @@ process_vcf_purity <- function (vcf_file, vcf_db){
   # get metadata
   vcf_meta <- parse_vcf_filename(vcf_file)
   tbl_name <- str_replace(string = unname(vcf_meta["name"]),pattern = "-",replacement = "_")
-  if(tbl_name %in% dbListTables(vcf_db$con)){
-    return("Next Dataset")
-  }
+  #if(tbl_name %in% dbListTables(vcf_db$con)){ # can potentially replace dbListTables with src_tbls
+   # return("Next Dataset")
+  #}
   
   #read vcf
   vcf <- readVcf(vcf_file, geno=ref)
@@ -75,23 +75,19 @@ process_vcf_purity <- function (vcf_file, vcf_db){
   I16$POS <- vcf_tbl$POS
   vcf_join <- join(vcf_tbl,I16)
   
-  #move to database
-  copy_to(vcf_db, vcf_join, name = tbl_name, temporary = FALSE, indexes = list("PLAT","VIAL","REP","CHROM","POS"),)
+  #copy_to(vcf_db, vcf_join, name = tbl_name, temporary = FALSE, indexes = list("PLAT","VIAL","REP","CHROM","POS"))
+  dbWriteTable(conn = vcf_db$con, value =vcf_join, name = "pruity_test", append =TRUE,)
   rm(vcf,vcf_join,vcf_tbl,I16,PUR,PUR_prob97)
 }
-
-
 
 #initiate sqlite database
 vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
 
 #processing all mpileup vcf files
-vcf_miseq <- list.files(path = "../../data//RM8375//MiSeq//mpileup/mpileup_vcf/", full.names = TRUE)
-for(vcf in vcf_miseq){
-  process_vcf_purity(vcf_file = vcf, vcf_db)
-}
+vcf_dir_list <- list.files(c("../../data//RM8375//PGM//mpileup/mpileup_vcf/","../../data//RM8375//MiSeq//mpileup/mpileup_vcf/"),full.names = TRUE)
+vcf_dir_list <- grep("Undetermined",vcf_dir_list,invert =  TRUE,value = TRUE)
+vcf_dir_list <- grep("nomatch",vcf_dir_list,invert = TRUE, TRUE,value = TRUE)
 
-vcf_pgm <- list.files(path = "../../data//RM8375//PGM//mpileup/mpileup_vcf/", full.names = TRUE)
-for(vcf in vcf_pgm){
+for(vcf in vcf_dir_list[1]){
   process_vcf_purity(vcf_file = vcf, vcf_db)
 }
