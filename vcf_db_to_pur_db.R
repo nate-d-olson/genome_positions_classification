@@ -126,6 +126,16 @@ vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
 # 
 # # storing results as sql table -  compute(name = "purity_test_summary2", temporary = FALSE)
 
+#using select to get values from specific tables to summarize
+laply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "MiSeq" & vcf_meta_df$VIAL == 0],) 
+%>% do() %>% 
+  select(CHROM,POS, PUR_Q50) %>% group_by(POS,CHROM) %>% summarize(mean(PUR_Q50))
 
-## chaining
-vcf_meta_
+get_pure_quants <- function(db_tbl, src = vcf_db){
+   #selects and retrieves the purity quantile values for each PGM datatable
+    return(tbl(src = vcf_db, db_tbl) %>% select(POS, CHROM,PUR_Q50))
+}
+purity_MiSeq1 <- alply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "PGM" & ],.margins = 1, .fun=get_pure_quants) %>% union()
+  join_all()%>%  group_by(POS,CHROM)  %>% summarise(mean(PUR_Q50))
+
+PGM1 <- tbl(src = vcf_db,from = "S0h_1")
