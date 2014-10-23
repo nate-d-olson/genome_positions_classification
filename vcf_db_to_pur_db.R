@@ -32,7 +32,7 @@ vcf_meta_df$tbl_name <- str_replace(string = vcf_meta_df$name ,pattern = "-",rep
 
 
 ## connecting to db ----------------------------------------------------------
-vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
+vcf_db <- src_sqlite("../../data/RM8375/vcf_db_split_2.sqlite", create = T)
 
 
 # ## create pure_db -------------------------------------------------------------
@@ -120,22 +120,37 @@ vcf_db <- src_sqlite("../../data/RM8375/vcf_db.sqlite3", create = T)
 # ############################### PICK UP HERE #####################################################
 # purity_tbl %>% compute(name = "purity_full_test", temporary = FALSE)
 # 
-# 
-# purity_tbl %>% group_by(CHROM,POS,PLAT) %>% 
+#  purity_tbl %>% group_by(CHROM,POS,PLAT) %>% 
 #   summarise(median(PUR_Q50)) 
 # 
 # # storing results as sql table -  compute(name = "purity_test_summary2", temporary = FALSE)
-
-#using select to get values from specific tables to summarize
-laply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "MiSeq" & vcf_meta_df$VIAL == 0],) 
-%>% do() %>% 
-  select(CHROM,POS, PUR_Q50) %>% group_by(POS,CHROM) %>% summarize(mean(PUR_Q50))
-
-get_pure_quants <- function(db_tbl, src = vcf_db){
-   #selects and retrieves the purity quantile values for each PGM datatable
-    return(tbl(src = vcf_db, db_tbl) %>% select(POS, CHROM,PUR_Q50))
+# 
+ get_vcf_tbls <- function(db_tbl, src = vcf_db){
+   vcf_tbl <- tbl(src = vcf_db, db_tbl)
+    return(filter(vcf_tbl, WIDTH == 1))
 }
-purity_MiSeq1 <- alply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "PGM" & ],.margins = 1, .fun=get_pure_quants) %>% union()
-  join_all()%>%  group_by(POS,CHROM)  %>% summarise(mean(PUR_Q50))
+library(ggvis)
+# 
+# #using select to get values from specific tables to summarize
+# llply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "MiSeq" & vcf_meta_df$VIAL == 0], get_vcf_tbls) %>% do() %>% 
+#   select(CHROM,POS, PUR_Q50) %>% group_by(POS,CHROM) %>% summarize(mean(PUR_Q50))
+# 
+# get_pure_quants <- function(db_tbl, src = vcf_db){
+#    #selects and retrieves the purity quantile values for each PGM datatable
+#     return(tbl(src = vcf_db, db_tbl) %>% select(POS, CHROM,PUR_Q50))
+# }
+# purity_MiSeq1 <- alply(vcf_meta_df$tbl_name[vcf_meta_df$PLAT == "PGM"],.margins = 1, .fun=get_pure_quants) %>% union()
+#   join_all()%>%  group_by(POS,CHROM)  %>% summarise(mean(PUR_Q50))
+# 
+# PGM1 <- tbl(src = vcf_db,from = "S0h_1")
 
-PGM1 <- tbl(src = vcf_db,from = "S0h_1")
+#none of this is working .....
+library(ggplot2)
+for(i in vcf_meta_df$tbl_name){
+    print(i)
+    test_tbl <- get_vcf_tbls(i) %>% filter(PUR_Q50 < 0.95) %>% collect()
+    #test_tbl %>% ggvis(~PUR_Q50) %>% layer_histograms() %>% add_axis("x",title = i)
+    ggplot(test_tbl) + geom_bar(aes(x = PUR_Q50)) + theme_bw() + labs(title = i)
+    #test_tbl %>% ggvis(~POS,~PUR_Q50,stroke = ~CHROM) %>% group_by(CHROM) %>%layer_paths()
+    ggplot(test_tbl) + geom_path(aes(x = POS, y = PUR_Q50)) + facet_wrap(~CHROM, scale = "free_x") + theme_bw() + labs(title = i)
+}

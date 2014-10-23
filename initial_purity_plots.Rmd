@@ -1,0 +1,66 @@
+---
+title: "Micro RM Purity"
+author: "Nate Olson"
+date: "10/23/2014"
+output: html_document
+---
+
+## Plots of purity summary values by dataset
+```{r}
+library(plyr)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+```
+
+
+
+
+## db table metadata 
+
+```{r}
+vcf_dir_list <- list.files(c("../../data//RM8375//PGM//mpileup/mpileup_vcf/",
+                             "../../data//RM8375//MiSeq//mpileup/mpileup_vcf/"),
+                           full.names = TRUE)
+vcf_dir_list <- grep("Undetermined",vcf_dir_list,invert =  TRUE,value = TRUE)
+vcf_dir_list <- grep("nomatch",vcf_dir_list,invert = TRUE, TRUE,value = TRUE)
+
+parse_vcf_filename <- function(vcf_filename){
+  full_split <- str_split(vcf_filename,pattern = "mpileup_vcf//")[[1]]
+  if(grepl("MiSeq",full_split[1])){
+    sample_name <- str_split(full_split[2],"_")[[1]]
+    return(c("name" = sample_name[1],"PLAT"= "MiSeq",
+             "VIAL" = str_sub(sample_name[1],2,2) ,
+             "REP" = str_sub(sample_name[1],5,5)))
+  } else {
+    vial = str_sub(full_split[2], 13,13)
+    return(c("name" = str_c("PGM",vial,sep = "-"),
+             "PLAT"= "PGM","VIAL" = vial, "REP" = 1))
+  }  
+}
+
+vcf_meta_df <- ldply(vcf_dir_list,parse_vcf_filename)
+vcf_meta_df$tbl_name <- str_replace(string = vcf_meta_df$name ,pattern = "-",replacement = "_")
+```
+
+## connecting to db
+```{r}
+vcf_db <- src_sqlite("../../data/RM8375/vcf_db_split_2.sqlite", create = T)
+```
+
+
+## plots
+```{r}
+get_vcf_tbls <- function(db_tbl, src = vcf_db){
+   vcf_tbl <- tbl(src = vcf_db, db_tbl)
+    return(filter(vcf_tbl, WIDTH == 1))
+}
+
+for(i in vcf_meta_df$tbl_name){
+    test_tbl <- get_vcf_tbls(i) %>% filter(PUR_Q50 < 0.95) %>% collect()
+    #test_tbl %>% ggvis(~PUR_Q50) %>% layer_histograms() %>% add_axis("x",title = i)
+    print(ggplot(test_tbl) + geom_bar(aes(x = PUR_Q50)) + theme_bw() + labs(title = i))
+    #test_tbl %>% ggvis(~POS,~PUR_Q50,stroke = ~CHROM) %>% group_by(CHROM) %>%layer_paths()
+    print(ggplot(test_tbl) + geom_path(aes(x = POS, y = PUR_Q50)) + facet_wrap(~CHROM, scale = "free_x") + theme_bw() + labs(title = i))
+}
+```
